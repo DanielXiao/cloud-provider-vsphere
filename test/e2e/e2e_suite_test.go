@@ -137,30 +137,36 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 		Expect(configPath).To(BeAnExistingFile(), "invalid test suite argument. e2e.config should be an existing file.")
 		e2eConfig = clusterctl.LoadE2EConfig(ctx, clusterctl.LoadE2EConfigInput{ConfigPath: configPath})
 		Expect(e2eConfig).NotTo(BeNil(), "cannot load e2e config file from ", configPath)
+		klog.Infof("e2eConfig: %+v", e2eConfig)
 	})
 
 	Expect(os.MkdirAll(artifactFolder, 0755)).To(Succeed(), "Invalid test suite argument. Can't create e2e.artifacts-folder %q", artifactFolder) //nolint:gosec
 
+	klog.Infof("artifactFolder: %s", artifactFolder)
 	By("Ensure clusterctl config", func() {
 		if clusterctlConfig == "" {
 			clusterctlConfigPath = createClusterctlLocalRepository(e2eConfig, filepath.Join(artifactFolder, "repository"))
 		} else {
 			clusterctlConfigPath = clusterctlConfig
 		}
+		klog.Infof("clusterctlConfigPath: %s", clusterctlConfigPath)
 	})
 
 	By("Init vSphere session", func() {
 		vsphere, err = initVSphereTestClient(ctx, e2eConfig)
 		Expect(err).Should(BeNil())
 		Expect(vsphere).NotTo(BeNil())
+		klog.Infof("vsphereclient: %+v", vsphere)
 	})
 
 	By("Setup bootstrap cluster", func() {
-		provider = bootstrap.CreateKindBootstrapClusterAndLoadImages(ctx, bootstrap.CreateKindBootstrapClusterAndLoadImagesInput{
+		input := bootstrap.CreateKindBootstrapClusterAndLoadImagesInput{
 			Name:               e2eConfig.ManagementClusterName,
 			RequiresDockerSock: e2eConfig.HasDockerProvider(),
 			Images:             e2eConfig.Images,
-		})
+		}
+		klog.Infof("CreateKindBootstrapClusterAndLoadImagesInput: %+v", input)
+		provider = bootstrap.CreateKindBootstrapClusterAndLoadImages(ctx, input)
 		Expect(provider).NotTo(BeNil())
 
 		kubeconfig = provider.GetKubeconfigPath()
@@ -172,18 +178,20 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 	})
 
 	By("Initialize bootstrap cluster", func() {
-		clusterctl.InitManagementClusterAndWatchControllerLogs(ctx, clusterctl.InitManagementClusterAndWatchControllerLogsInput{
+		input := clusterctl.InitManagementClusterAndWatchControllerLogsInput{
 			ClusterProxy:            proxy,
 			ClusterctlConfigPath:    clusterctlConfigPath,
 			LogFolder:               filepath.Join(artifactFolder, "clusters", proxy.GetName()),
 			InfrastructureProviders: e2eConfig.InfrastructureProviders(),
-		}, e2eConfig.GetIntervals(proxy.GetName(), "wait-controllers")...)
+		}
+		klog.Infof("InitManagementClusterAndWatchControllerLogsInput: %+v", input)
+		clusterctl.InitManagementClusterAndWatchControllerLogs(ctx, input, e2eConfig.GetIntervals(proxy.GetName(), "wait-controllers")...)
 	})
 
 	By("Create a workload cluster", func() {
 		workloadName = fmt.Sprintf("%s-%s", "workload", util.RandomString(6))
 		workloadResult = new(clusterctl.ApplyClusterTemplateAndWaitResult)
-		clusterctl.ApplyClusterTemplateAndWait(ctx, clusterctl.ApplyClusterTemplateAndWaitInput{
+		input := clusterctl.ApplyClusterTemplateAndWaitInput{
 			ClusterProxy: proxy,
 			ConfigCluster: clusterctl.ConfigClusterInput{
 				LogFolder:                filepath.Join(artifactFolder, "clusters", proxy.GetName()),
@@ -200,7 +208,9 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 			WaitForClusterIntervals:      e2eConfig.GetIntervals(proxy.GetName(), "wait-cluster"),
 			WaitForControlPlaneIntervals: e2eConfig.GetIntervals(proxy.GetName(), "wait-control-plane"),
 			WaitForMachineDeployments:    e2eConfig.GetIntervals(proxy.GetName(), "wait-worker-nodes"),
-		}, workloadResult)
+		}
+		klog.Infof("ApplyClusterTemplateAndWaitInput: %+v", input)
+		clusterctl.ApplyClusterTemplateAndWait(ctx, input, workloadResult)
 		klog.Infof("Created workload cluster %s\n", workloadName)
 	})
 
@@ -212,6 +222,7 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 		if err != nil {
 			Fail("Cannot retrieve workload cluster kubeconfig")
 		}
+		klog.Infof("workloadKubeconfig: %s", workloadKubeconfig)
 		err = writeSecretKubeconfigToFile(&workloadKubeconfigSecret, "value", workloadKubeconfig)
 		Expect(err).NotTo(HaveOccurred())
 		workloadRestConfig, err = clientcmd.BuildConfigFromFlags("", workloadKubeconfig)
@@ -237,12 +248,15 @@ var _ = SynchronizedBeforeSuite(func() []byte {
 		actionConfig := new(action.Configuration)
 		err = actionConfig.Init(kube.GetConfig(workloadKubeconfig, "", namespace), namespace, os.Getenv("HELM_DRIVER"), func(format string, v ...interface{}) {})
 		Expect(err).NotTo(HaveOccurred())
+		klog.Infof("actionConfig: %+v", actionConfig)
 
 		chart, err := loader.Load(chartFolder)
 		Expect(err).NotTo(HaveOccurred())
 
 		install := newCPIInstallFromConfig(actionConfig)
+		klog.Infof("install: %+v", install)
 		values := newCPIInstallValues()
+		klog.Infof("CPIInstallValues: %+v", values)
 
 		var release *helmrelease.Release
 		Eventually(func() error {
@@ -337,6 +351,7 @@ func writeSecretKubeconfigToFile(secret *corev1.Secret, key string, file string)
 
 // removeOldCPI removes the old vsphere-cpi instance before installing a build version using helm
 func removeOldCPI(clientset *kubernetes.Clientset) error {
+	klog.Infof("remove CPI in namespace %s", namespace)
 	if err := clientset.AppsV1().DaemonSets(namespace).Delete(ctx, "vsphere-cloud-controller-manager", metav1.DeleteOptions{}); err != nil {
 		return err
 	}
